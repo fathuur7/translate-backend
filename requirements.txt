@@ -1,0 +1,20 @@
+# --- Core Frameworks ---
+fastapi
+uvicorn[standard]
+flask
+flask-cors
+
+# --- Google OAuth2 Auth ---
+google-auth
+google-auth-oauthlib
+requests
+python-dotenv
+
+# --- Audio & Video Processing ---
+openai-whisper
+moviepy
+ffmpeg-python
+python-multipart
+
+# --- Translation ---
+googletrans==4.0.0-rc1
