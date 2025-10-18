@@ -1,120 +1,158 @@
-from flask import redirect, request, jsonify, session
+from fastapi import APIRouter, Request, Depends
+from fastapi.responses import RedirectResponse, JSONResponse
 from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
-import requests
+from sqlalchemy.exc import SQLAlchemyError
+from jose import jwt, JWTError
+import httpx
 import os
+from datetime import datetime, timedelta
+
+from app.config.db import get_db
+from app.models.User import User
 
 class AuthController:
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-    GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
-    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
+    def __init__(self):
+        self.router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
-    @staticmethod
-    def google_login():
-        """Redirect user to Google OAuth login page"""
-        try:
-            google_auth_url = (
-                "https://accounts.google.com/o/oauth2/v2/auth"
-                "?response_type=code"
-                f"&client_id={AuthController.GOOGLE_CLIENT_ID}"
-                f"&redirect_uri={AuthController.GOOGLE_REDIRECT_URI}"
-                "&scope=openid%20email%20profile"
-                "&access_type=offline"
-                "&prompt=consent"
-            )
-            return redirect(google_auth_url)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        # --- ENVIRONMENT VARIABLES ---
+        self.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+        self.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+        self.GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+        self.FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
 
-    @staticmethod
-    def google_callback():
-        """Handle Google OAuth callback"""
+        # JWT
+        self.JWT_SECRET = os.getenv("JWT_SECRET")
+        self.JWT_ALGORITHM = "HS256"
+        self.JWT_EXPIRE_MINUTES = 60 * 24  # 1 hari
+
+        # REGISTER ROUTES
+        self.router.get("/google")(self.google_login)
+        self.router.get("/google/callback")(self.google_callback)
+        self.router.post("/logout")(self.logout)
+        self.router.get("/me")(self.get_current_user)
+
+    # =====================================================
+    # GOOGLE LOGIN
+    # =====================================================
+    async def google_login(self):
+        google_auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth"
+            "?response_type=code"
+            f"&client_id={self.GOOGLE_CLIENT_ID}"
+            f"&redirect_uri={self.GOOGLE_REDIRECT_URI}"
+            "&scope=openid%20email%20profile"
+            "&access_type=offline"
+            "&prompt=consent"
+        )
+        return RedirectResponse(url=google_auth_url)
+
+    # =====================================================
+    # GOOGLE CALLBACK (EXCHANGE TOKEN)
+    # =====================================================
+    async def google_callback(self, request: Request):
         try:
-            code = request.args.get("code")
-            
+            code = request.query_params.get("code")
             if not code:
-                return redirect(f"{AuthController.FRONTEND_URL}/login?error=no_code")
+                return RedirectResponse(f"{self.FRONTEND_URL}/login?error=no_code")
 
-            # Exchange code for access token
             token_url = "https://oauth2.googleapis.com/token"
             data = {
                 "code": code,
-                "client_id": AuthController.GOOGLE_CLIENT_ID,
-                "client_secret": AuthController.GOOGLE_CLIENT_SECRET,
-                "redirect_uri": AuthController.GOOGLE_REDIRECT_URI,
+                "client_id": self.GOOGLE_CLIENT_ID,
+                "client_secret": self.GOOGLE_CLIENT_SECRET,
+                "redirect_uri": self.GOOGLE_REDIRECT_URI,
                 "grant_type": "authorization_code",
             }
-            
-            token_response = requests.post(token_url, data=data)
-            token_json = token_response.json()
+
+            async with httpx.AsyncClient() as client:
+                token_response = await client.post(token_url, data=data)
+                token_json = token_response.json()
 
             if "error" in token_json:
-                return redirect(f"{AuthController.FRONTEND_URL}/login?error={token_json['error']}")
+                return RedirectResponse(f"{self.FRONTEND_URL}/login?error={token_json['error']}")
 
-            # Verify ID token
+            # --- VERIFY GOOGLE TOKEN ---
             idinfo = id_token.verify_oauth2_token(
-                token_json["id_token"], 
-                grequests.Request(), 
-                AuthController.GOOGLE_CLIENT_ID
+                token_json["id_token"],
+                grequests.Request(),
+                self.GOOGLE_CLIENT_ID
             )
 
-            # Store user info in session
             user_data = {
                 "id": idinfo.get("sub"),
                 "email": idinfo["email"],
                 "name": idinfo.get("name"),
                 "picture": idinfo.get("picture"),
-                "email_verified": idinfo.get("email_verified", False)
+                "email_verified": idinfo.get("email_verified", False),
             }
-            
-            session["user"] = user_data
-            session["access_token"] = token_json["access_token"]
-            session["id_token"] = token_json["id_token"]
-            
-            if "refresh_token" in token_json:
-                session["refresh_token"] = token_json["refresh_token"]
 
-            # Redirect to frontend with success
-            return redirect(f"{AuthController.FRONTEND_URL}/dashboard?auth=success")
+            # --- SIMPAN KE DATABASE ---
+            db = next(get_db())
+            try:
+                existing_user = db.query(User).filter(User.email == user_data["email"]).first()
+                if not existing_user:
+                    new_user = User(**user_data)
+                    db.add(new_user)
+                    db.commit()
+                else:
+                    existing_user.name = user_data["name"]
+                    existing_user.picture = user_data["picture"]
+                    existing_user.email_verified = user_data["email_verified"]
+                    db.commit()
+            except SQLAlchemyError as e:
+                db.rollback()
+                print(f"❌ Database error: {e}")
+            finally:
+                db.close()
 
-        except ValueError as e:
-            # Invalid token
-            return redirect(f"{AuthController.FRONTEND_URL}/login?error=invalid_token")
+            # --- BUAT JWT TOKEN ---
+            payload = {
+                "sub": user_data["email"],
+                "name": user_data["name"],
+                "picture": user_data["picture"],
+                "email_verified": user_data["email_verified"],
+                "exp": datetime.utcnow() + timedelta(minutes=self.JWT_EXPIRE_MINUTES),
+            }
+            jwt_token = jwt.encode(payload, self.JWT_SECRET, algorithm=self.JWT_ALGORITHM)
+
+            # Redirect ke frontend dengan token di URL
+            return RedirectResponse(f"{self.FRONTEND_URL}/auth/callback?token={jwt_token}")
+
         except Exception as e:
-            return redirect(f"{AuthController.FRONTEND_URL}/login?error=server_error")
+            print(f"⚠️ Error: {e}")
+            return RedirectResponse(f"{self.FRONTEND_URL}/login?error=server_error")
 
-    @staticmethod
-    def logout():
-        """Logout user and clear session"""
+    # =====================================================
+    # GET CURRENT USER (dari JWT payload, bukan DB)
+    # =====================================================
+    async def get_current_user(self, user: dict):
+        """
+        user: dict dari middleware (JWT payload)
+        Tidak perlu query DB lagi karena data sudah ada di JWT
+        """
         try:
-            # Revoke Google token if exists
-            access_token = session.get("access_token")
-            if access_token:
-                revoke_url = f"https://oauth2.googleapis.com/revoke?token={access_token}"
-                requests.post(revoke_url)
-            
-            # Clear session
-            session.clear()
-            
-            return jsonify({
+            return JSONResponse({
                 "success": True,
-                "message": "Logged out successfully"
-            }), 200
+                "user": {
+                    "email": user.get("sub"),  # sub = email
+                    "name": user.get("name"),
+                    "picture": user.get("picture"),
+                    "email_verified": user.get("email_verified", False)
+                }
+            })
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return JSONResponse(status_code=500, content={"error": str(e)})
 
-    @staticmethod
-    def get_current_user():
-        """Get current authenticated user"""
-        try:
-            user = session.get("user")
-            if not user:
-                return jsonify({"error": "Not authenticated"}), 401
-            
-            return jsonify({
-                "success": True,
-                "user": user
-            }), 200
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+    # =====================================================
+    # LOGOUT (FRONTEND ONLY)
+    # =====================================================
+    async def logout(self, user: dict):
+        """
+        user: dict dari middleware (opsional, hanya untuk validasi)
+        """
+        return JSONResponse({
+            "success": True, 
+            "message": "Token cleared on client side",
+            "user_email": user.get("sub")  # Opsional: konfirmasi siapa yang logout
+        })

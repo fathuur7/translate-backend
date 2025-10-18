@@ -10,6 +10,10 @@ google-auth-oauthlib
 requests
 python-dotenv
 
+# --- JWT Authentication ---
+python-jose[cryptography]
+passlib[bcrypt]  # untuk hashing password (kalau nanti kamu ingin tambah sistem login manual)
+
 # --- Audio & Video Processing ---
 openai-whisper
 moviepy
@@ -18,3 +22,6 @@ python-multipart
 
 # --- Translation ---
 googletrans==4.0.0-rc1
+
+# --- Database ---
+sqlalchemy
