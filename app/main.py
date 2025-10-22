@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import translate_router
-from app.routers import auth_routes
+# from app.routers import auth_routes
 
 app = FastAPI(
     title="Video Subtitle and Translation API",
@@ -20,7 +20,7 @@ app.add_middleware(
 
 
 app.include_router(translate_router.router)
-app.include_router(auth_routes.auth_router)
+# app.include_router(auth_routes.auth_router)
 
 
 @app.get("/", tags=["General"])
