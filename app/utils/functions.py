@@ -4,6 +4,62 @@ from fastapi import UploadFile
 import moviepy as mp
 import os
 import time
+import cloudinary
+import cloudinary.uploader
+from typing import Optional
+
+# Konfigurasi Cloudinary
+def configure_cloudinary(cloud_name: str, api_key: str, api_secret: str):
+    """
+    Konfigurasi Cloudinary dengan credentials Anda.
+    Panggil fungsi ini di awal aplikasi (main.py atau startup).
+    """
+    cloudinary.config(
+        cloud_name=cloud_name,
+        api_key=api_key,
+        api_secret=api_secret,
+        secure=True
+    )
+    print("Cloudinary berhasil dikonfigurasi!")
+
+
+def upload_to_cloudinary(file_path: str, resource_type: str = "auto", 
+                         folder: str = "videos") -> Optional[dict]:
+    """
+    Upload file ke Cloudinary.
+    
+    Args:
+        file_path: Path file lokal yang akan diupload
+        resource_type: Tipe resource ('video', 'audio', 'image', 'raw', 'auto')
+        folder: Folder di Cloudinary untuk menyimpan file
+    
+    Returns:
+        Dictionary berisi informasi upload (url, public_id, dll) atau None jika gagal
+    """
+    if not os.path.exists(file_path):
+        print(f"Error: File tidak ditemukan: {file_path}")
+        return None
+    
+    try:
+        print(f"Uploading {file_path} ke Cloudinary...")
+        
+        # Upload file
+        result = cloudinary.uploader.upload(
+            file_path,
+            resource_type=resource_type,
+            folder=folder,
+            use_filename=True,
+            unique_filename=True,
+            overwrite=False
+        )
+        
+        print(f"Upload berhasil! URL: {result.get('secure_url')}")
+        return result
+        
+    except Exception as e:
+        print(f"Error saat upload ke Cloudinary: {e}")
+        return None
+
 
 def save_upload_file(upload_file: UploadFile, destination: str) -> bool:
     """

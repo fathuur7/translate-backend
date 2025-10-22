@@ -40,13 +40,18 @@ async def create_video_translation(
 
             print(f"Berhasil memproses video: {video_file.filename}")
             
-            response_data = TranslationResponse(
-                filename=video_file.filename,
-                target_language=target_language,
-                original_transcript=results.get("transcript_content"),
-                original_srt=results.get("original_srt_content"),
-                translated_srt=results.get("translated_srt_content")
-            )
+            # Response dengan URL Cloudinary
+            response_data = {
+                "filename": video_file.filename,
+                "target_language": target_language,
+                "original_transcript": results.get("transcript_content"),
+                "original_srt": results.get("original_srt_content"),
+                "translated_srt": results.get("translated_srt_content"),
+                # Cloudinary URLs
+                "cloudinary_video_url": results.get("video_url"),
+                "cloudinary_srt_original_url": results.get("srt_original_url"),
+                "cloudinary_srt_translated_url": results.get("srt_translated_url")
+            }
             
             return JSONResponse(content=jsonable_encoder(response_data))
 

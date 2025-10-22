@@ -11,3 +11,9 @@ class TranslationResponse(BaseModel):
     original_transcript: str
     original_srt: str
     translated_srt: Optional[str] = None
+    
+    # Cloudinary URLs
+    cloudinary_video_url: Optional[str] = None
+    cloudinary_srt_original_url: Optional[str] = None
+    cloudinary_srt_translated_url: Optional[str] = None
+    
