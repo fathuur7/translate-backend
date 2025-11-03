@@ -1,27 +1,46 @@
 import os
 import whisper
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 from app.utils.functions import (
     extract_audio,
     transcribe_audio,
     create_srt_content,
     upload_to_cloudinary,
-    configure_cloudinary
+    # configure_cloudinary (disabled)
 )
+from app.utils.cache_manager import transcription_cache
 
 class TranslationService:
-    def __init__(self):
-        print("Memuat model Whisper... (Mungkin butuh beberapa saat)")
-        self.model = whisper.load_model("base")
-        self.translator = Translator()
+    def __init__(self, whisper_model: str = None):
+        """
+        Initialize Translation Service.
         
-        # Konfigurasi Cloudinary
-        configure_cloudinary(
-            cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-            api_key=os.getenv("CLOUDINARY_API_KEY"),
-            api_secret=os.getenv("CLOUDINARY_API_SECRET")
-        )
-        print("Model Whisper berhasil dimuat.")
+        Args:
+            whisper_model: Model size untuk Whisper. Options:
+                - "tiny" - Paling cepat, akurasi rendah (~1GB RAM, 32x faster)
+                - "base" - Balance speed/accuracy (default)
+                - "small" - Lebih akurat, lebih lambat
+                - "medium" - High accuracy, slower
+                - "large" - Best accuracy, very slow
+        """
+        # Gunakan environment variable atau default ke "base"
+        model_name = whisper_model or os.getenv("WHISPER_MODEL", "base")
+        
+        print(f"⏳ Memuat model Whisper '{model_name}'... (Mungkin butuh beberapa saat)")
+        self.model = whisper.load_model(model_name)
+        # deep-translator doesn't need initialization, we'll use it directly in functions
+        self.translator = None  # Not needed anymore
+        
+        # Cloudinary telah dinonaktifkan — upload sekarang disimpan lokal
+        print(f"✅ Model Whisper '{model_name}' berhasil dimuat.")
+        
+        # Performance hint
+        if model_name == "tiny":
+            print("💡 Using 'tiny' model - FASTEST transcription, lower accuracy")
+        elif model_name == "base":
+            print("💡 Using 'base' model - Balanced speed & accuracy")
+        elif model_name in ["small", "medium", "large"]:
+            print(f"💡 Using '{model_name}' model - Higher accuracy, slower processing")
 
     def process_video(self, video_path: str, target_language: str = None) -> dict:
         """
@@ -45,8 +64,14 @@ class TranslationService:
         srt_translated_path = os.path.join(output_dir, f"{filename_no_ext}_{target_language}.srt")
 
         try:
-            # 🎥 Upload video ke Cloudinary
-            print("Mengupload video ke Cloudinary...")
+            # 🔍 Check cache dulu
+            cached_result = transcription_cache.get(video_path, target_language)
+            if cached_result:
+                print("⚡ Menggunakan hasil dari cache (skip processing)")
+                return cached_result
+            
+            # 🎥 Upload video ke local storage
+            print("Menyimpan video ke local storage...")
             video_upload_result = upload_to_cloudinary(
                 file_path=video_path,
                 resource_type="video",
@@ -56,9 +81,9 @@ class TranslationService:
             video_url = None
             if video_upload_result:
                 video_url = video_upload_result.get('secure_url')
-                print(f"Video berhasil diupload: {video_url}")
+                print(f"Video berhasil disimpan: {video_url}")
             else:
-                print("Warning: Gagal mengupload video ke Cloudinary")
+                print("Warning: Gagal menyimpan video")
 
             # 1️⃣ Ekstrak audio dari video ke folder output
             extract_audio(video_path, audio_path)
@@ -69,10 +94,11 @@ class TranslationService:
                 print("Transkripsi tidak menghasilkan segmen.")
                 return None
 
-            # 3️⃣ Buat konten SRT asli
+            # 3️⃣ Buat konten SRT asli (tanpa terjemahan)
             original_srt_content = create_srt_content(
                 segments=transcription_result['segments'],
-                translator_instance=self.translator
+                translator_instance=None,  # Tidak perlu translator untuk original
+                translate_to=None  # Original language (no translation)
             )
 
             # Simpan ke file
@@ -97,10 +123,10 @@ class TranslationService:
             srt_translated_url = None
             
             if target_language:
-                print(f"Menerjemahkan ke {target_language}...")
+                print(f"🌐 Menerjemahkan ke bahasa '{target_language}'...")
                 translated_srt_content = create_srt_content(
                     segments=transcription_result['segments'],
-                    translator_instance=self.translator,
+                    translator_instance=None,  # deep-translator tidak perlu instance
                     translate_to=target_language
                 )
 
@@ -119,7 +145,7 @@ class TranslationService:
                     srt_translated_url = srt_translated_upload.get('secure_url')
                     print(f"SRT terjemahan berhasil diupload: {srt_translated_url}")
 
-            # 5️⃣ Kembalikan hasil ke API dengan URL Cloudinary
+            # 5️⃣ Kembalikan hasil ke API
             output = {
                 "transcript_content": transcription_result['text'],
                 "original_srt_content": original_srt_content,
@@ -127,14 +153,17 @@ class TranslationService:
                 "audio_path": audio_path,
                 "original_srt_file": srt_original_path,
                 "translated_srt_file": srt_translated_path if target_language else None,
-                # URL Cloudinary
+                # URL local storage
                 "video_url": video_url,
                 "srt_original_url": srt_original_url,
                 "srt_translated_url": srt_translated_url
             }
 
+            # 💾 Simpan ke cache untuk request berikutnya
+            transcription_cache.set(video_path, output, target_language)
+
             print(f"✅ Semua hasil disimpan di folder: {output_dir}")
-            print(f"✅ Video dan subtitle tersedia di Cloudinary")
+            print(f"✅ Video dan subtitle tersedia di local storage")
             return output
 
         finally:

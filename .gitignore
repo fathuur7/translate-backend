@@ -1,4 +1,16 @@
 venv
 .env
 output
+uploads
+app/static/uploads
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.log

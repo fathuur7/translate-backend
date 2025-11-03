@@ -21,9 +21,10 @@ ffmpeg-python
 python-multipart
 
 # --- Translation ---
-googletrans==4.0.0-rc1
+# googletrans==4.0.0-rc1  # REMOVED - incompatible with Python 3.13 (requires deprecated 'cgi' module)
+deep-translator  # Python 3.13 compatible alternative
 
 # --- Database ---
 sqlalchemy
-cloudinary
+
 
