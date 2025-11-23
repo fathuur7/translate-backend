@@ -12,19 +12,18 @@ python-dotenv
 
 # --- JWT Authentication ---
 python-jose[cryptography]
-passlib[bcrypt]  # untuk hashing password (kalau nanti kamu ingin tambah sistem login manual)
+passlib[bcrypt]
 
 # --- Audio & Video Processing ---
 openai-whisper
+faster-whisper
 moviepy
 ffmpeg-python
 python-multipart
 
 # --- Translation ---
-# googletrans==4.0.0-rc1  # REMOVED - incompatible with Python 3.13 (requires deprecated 'cgi' module)
-deep-translator  # Python 3.13 compatible alternative
+deep-translator
 
 # --- Database ---
 sqlalchemy
-
-
+werkzeug

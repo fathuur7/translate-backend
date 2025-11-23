@@ -1,5 +1,5 @@
 import os
-import whisper
+from faster_whisper import WhisperModel
 from deep_translator import GoogleTranslator
 from app.utils.functions import (
     extract_audio,
@@ -13,7 +13,7 @@ from app.utils.cache_manager import transcription_cache
 class TranslationService:
     def __init__(self, whisper_model: str = None):
         """
-        Initialize Translation Service.
+        Initialize Translation Service using Faster-Whisper.
         
         Args:
             whisper_model: Model size untuk Whisper. Options:
@@ -26,13 +26,16 @@ class TranslationService:
         # Gunakan environment variable atau default ke "base"
         model_name = whisper_model or os.getenv("WHISPER_MODEL", "base")
         
-        print(f"⏳ Memuat model Whisper '{model_name}'... (Mungkin butuh beberapa saat)")
-        self.model = whisper.load_model(model_name)
+        print(f"⏳ Memuat model Faster-Whisper '{model_name}'... (Mungkin butuh beberapa saat)")
+        
+        # cpu_threads=4 untuk optimalisasi CPU
+        self.model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=4)
+        
         # deep-translator doesn't need initialization, we'll use it directly in functions
         self.translator = None  # Not needed anymore
         
         # Cloudinary telah dinonaktifkan — upload sekarang disimpan lokal
-        print(f"✅ Model Whisper '{model_name}' berhasil dimuat.")
+        print(f"✅ Model Faster-Whisper '{model_name}' berhasil dimuat.")
         
         # Performance hint
         if model_name == "tiny":
@@ -86,7 +89,9 @@ class TranslationService:
                 print("Warning: Gagal menyimpan video")
 
             # 1️⃣ Ekstrak audio dari video ke folder output
-            extract_audio(video_path, audio_path)
+            if not extract_audio(video_path, audio_path):
+                print("Error: Gagal mengekstrak audio dari video.")
+                return None
 
             # 2️⃣ Transkripsi audio
             transcription_result = transcribe_audio(self.model, audio_path)

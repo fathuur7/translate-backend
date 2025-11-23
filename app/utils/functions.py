@@ -157,7 +157,7 @@ def extract_audio(video_path: str, audio_path: str) -> bool:
 
 def transcribe_audio(model, audio_path: str) -> dict:
     """
-    Mentranskripsi file audio menggunakan model Whisper.
+    Mentranskripsi file audio menggunakan Faster-Whisper.
     Returns: Dictionary hasil transkripsi atau None jika gagal.
     """
     # Validasi file audio
@@ -169,40 +169,44 @@ def transcribe_audio(model, audio_path: str) -> dict:
         print(f"Error: File audio kosong: {audio_path}")
         return None
     
-    print("Melakukan transkripsi audio...")
+    print("Melakukan transkripsi audio dengan Faster-Whisper...")
     
     try:
-        # fp16=False direkomendasikan untuk kompatibilitas CPU
-        result = model.transcribe(
+        # Faster-Whisper returns a generator
+        segments_generator, info = model.transcribe(
             audio_path, 
-            fp16=False,
+            beam_size=5,
             language=None,  # Auto-detect language
-            verbose=False
+            vad_filter=True # Filter silence
         )
         
-        # Validasi hasil transkripsi
-        if not result:
-            print("Error: Model tidak mengembalikan hasil.")
-            return None
+        print(f"Detected language '{info.language}' with probability {info.language_probability}")
         
-        if 'segments' not in result or not result['segments']:
+        # Convert generator to list
+        segments = []
+        full_text = []
+        
+        for segment in segments_generator:
+            segments.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text
+            })
+            full_text.append(segment.text)
+            
+        result = {
+            "segments": segments,
+            "text": " ".join(full_text),
+            "language": info.language
+        }
+        
+        # Validasi hasil transkripsi
+        if not segments:
             print("Warning: Transkripsi tidak menghasilkan segmen.")
         
-        if 'text' not in result or not result['text'].strip():
-            print("Warning: Transkripsi tidak menghasilkan teks.")
-        
-        print(f"Transkripsi selesai. Ditemukan {len(result.get('segments', []))} segmen.")
+        print(f"Transkripsi selesai. Ditemukan {len(segments)} segmen.")
         return result
         
-    except FileNotFoundError as e:
-        print(f"❌ Error: FFmpeg tidak ditemukan!")
-        print(f"   Whisper membutuhkan FFmpeg untuk memproses audio.")
-        print(f"   Solusi:")
-        print(f"   1. Install FFmpeg: https://ffmpeg.org/download.html")
-        print(f"   2. Atau gunakan Chocolatey: choco install ffmpeg")
-        print(f"   3. Restart terminal setelah install")
-        print(f"   Technical error: {e}")
-        return None
     except Exception as e:
         print(f"Error saat transkripsi: {e}")
         print(f"Error type: {type(e).__name__}")
@@ -265,8 +269,8 @@ def _translate_text(translator, text: str, target_language: str, max_retries: in
 
 def _translate_batch(translator, texts: List[str], target_language: str, max_retries: int = 3) -> List[str]:
     """
-    Translate multiple texts sekaligus (batch) untuk mengurangi network overhead.
-    Menggunakan deep-translator (Python 3.13 compatible).
+    Translate multiple texts sekaligus (batch) dengan parallel processing.
+    Menggunakan ThreadPoolExecutor untuk mempercepat request ke Google Translate.
     """
     from deep_translator import GoogleTranslator
     
@@ -274,67 +278,53 @@ def _translate_batch(translator, texts: List[str], target_language: str, max_ret
         return texts
     
     # Filter texts yang perlu ditranslate (check cache)
-    results = []
-    to_translate = []
-    indices_to_translate = []
+    results = [None] * len(texts)
+    to_translate_indices = []
     
     for i, text in enumerate(texts):
         if not text or not text.strip():
-            results.append(text)
+            results[i] = text
             continue
         
         cache_key = _get_text_hash(text, target_language)
         if cache_key in _translation_cache:
-            results.append(_translation_cache[cache_key])
+            results[i] = _translation_cache[cache_key]
         else:
-            results.append(None)  # Placeholder
-            to_translate.append(text.strip())
-            indices_to_translate.append(i)
+            to_translate_indices.append(i)
     
     # Jika semua sudah di cache, langsung return
-    if not to_translate:
+    if not to_translate_indices:
         return results
     
-    # Translate batch menggunakan deep-translator (one by one, tapi dengan cache)
-    # Note: deep-translator tidak support batch natively, jadi kita process satu-per-satu dengan cache
-    for attempt in range(max_retries):
-        try:
-            print(f"📦 Batch translating {len(to_translate)} texts...")
-            translator_instance = GoogleTranslator(source='auto', target=target_language)
-            
-            # Process each text
-            for idx, text in enumerate(to_translate):
-                original_idx = indices_to_translate[idx]
-                
-                try:
-                    translated_text = translator_instance.translate(text)
-                    if translated_text:
-                        results[original_idx] = translated_text
-                        # Cache it
-                        cache_key = _get_text_hash(text, target_language)
-                        _translation_cache[cache_key] = translated_text
-                    else:
-                        results[original_idx] = text
-                except Exception as e:
-                    print(f"⚠️  Failed to translate segment {idx}: {e}")
-                    results[original_idx] = text
-            
-            print(f"✅ Batch translation completed!")
-            return results
-            
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2
-                print(f"⚠️  Batch translation failed (attempt {attempt+1}/{max_retries}). Retry in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                print(f"❌ Batch translation failed after {max_retries} attempts: {e}")
-                # Fallback: return original texts
-                for idx in indices_to_translate:
-                    if results[idx] is None:
-                        results[idx] = texts[idx]
-                return results
+    print(f"📦 Parallel translating {len(to_translate_indices)} segments...")
     
+    # Fungsi helper untuk single translation
+    def translate_single(idx, text):
+        try:
+            # Create new instance per thread to avoid race conditions
+            t = GoogleTranslator(source='auto', target=target_language)
+            translated = t.translate(text)
+            return idx, translated
+        except Exception as e:
+            return idx, None
+
+    # Execute in parallel
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for idx in to_translate_indices:
+            futures.append(executor.submit(translate_single, idx, texts[idx]))
+            
+        for future in as_completed(futures):
+            idx, translated = future.result()
+            if translated:
+                results[idx] = translated
+                # Cache it
+                cache_key = _get_text_hash(texts[idx], target_language)
+                _translation_cache[cache_key] = translated
+            else:
+                results[idx] = texts[idx] # Fallback to original
+                
+    print(f"✅ Parallel translation completed!")
     return results
 
 

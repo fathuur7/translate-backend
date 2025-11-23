@@ -53,6 +53,20 @@ Sistem ini dioptimasi untuk **kecepatan tinggi** dengan fitur caching, batch tra
 
 ---
 
+---
+
+## 🔌 Frontend Integration
+
+This backend is designed to work seamlessly with the **TransVidio Frontend**.
+
+- **Repository**: [TransVidio Frontend](../transvidio-frontend)
+- **Integration**:
+    - **API URL**: The frontend connects to `http://localhost:8000` (configurable via `.env`).
+    - **CORS**: Configured to allow requests from the frontend (default `*`).
+    - **Static Files**: Serves processed videos and subtitles via `/static` endpoint.
+
+---
+
 ## 🚀 Quick Start
 
 ### Prerequisites
